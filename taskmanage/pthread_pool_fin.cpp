@@ -12,6 +12,7 @@
 #define BUF_SIZE 1024
 #define PORT 7800
 #define THREADNUM 3
+
 typedef struct condition
 {
     pthread_mutex_t pmutex; //锁变量
@@ -32,7 +33,7 @@ typedef struct threadpool
     task_t *first;
     task_t *last;
     int listen_sock;
-    int app_sock;
+    int app_sock[10];
     int pid;
     int counter; //线程数量
     int idle;
@@ -125,13 +126,12 @@ void *thread_routine(void *arg)
         }
         //等到到条件，处于工作状态
         pool->idle--;
-        printf("app_sock = %d,k=%d\n", pool->app_sock,k);
-        if (pool->app_sock >= 0)
+        printf("app_sock = %d,k=%d\n", pool->app_sock[k],k);
+        if (pool->app_sock[k] >= 0)
         {
             printf("client online!\n");
-            recv(pool->app_sock, buf, sizeof(buf), 0);
+            recv(pool->app_sock[k], buf, sizeof(buf), 0);
             printf("%s\n", buf);
-            printf("......................\n");
         }
 
         if (pool->first != NULL)
@@ -166,8 +166,9 @@ void *thread_routine(void *arg)
         }
         condition_unlock(&pool->ready);
     }
-    close(pool->app_sock);
+    close(pool->app_sock[k]);
     printf("thread 0x%0x is exiting\n", (int)pthread_self());
+    printf("............................\n");
     return NULL;
 }
 
@@ -243,10 +244,12 @@ void threadpool_destory(threadpool_t *pool)
 void *mytask(void *arg)
 {
     printf("thread 0x%0x is working on task %d\n", (int)pthread_self(), *(int *)arg);
+    printf("............................\n");
     sleep(1);
     free(arg);
     return NULL;
 }
+
 int main()
 {
     threadpool_t pool;
@@ -272,15 +275,19 @@ int main()
     int k=0;
     while(1)
     {
-        pool.app_sock= accept(pool.listen_sock, (struct sockaddr *)&clientaddr, &len);
-        if(pool.app_sock>=0)
+        pool.app_sock[k]= accept(pool.listen_sock, (struct sockaddr *)&clientaddr, &len);
+        if(pool.app_sock[k]>=0)
         {
-            printf("accpet success!app_sock=%d,k=%d\n",pool.app_sock,k);
+            printf("accpet success!app_sock=%d,k=%d\n",pool.app_sock[k],k);
             k++;
         }
         int *arg = (int *)malloc(sizeof(int));
         *arg = k;
         threadpool_add_task(&pool, mytask, arg);
+        if(k==THREADNUM-1)
+        {
+            break;
+        }
     }
     sleep(15); //为了等待其他线程结束 当然也可以通过pthread_join来做
 
