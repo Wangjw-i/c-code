@@ -4,15 +4,18 @@
 #include <sys/unistd.h>
 #include <sys/socket.h>
 #include <pthread.h>
+#include <sys/msg.h>
 #include <time.h>
 #include <assert.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <errno.h>
+#include <sys/ipc.h>
+#include <sys/types.h>
 #define BUF_SIZE 1024
 #define PORT 7800
 #define THREADNUM 3
-
+#define KEY 5000
 typedef struct condition
 {
     pthread_mutex_t pmutex; //锁变量
@@ -39,10 +42,17 @@ typedef struct threadpool
     int idle;
     int max_threads; //最大线程数量
     int quit;        //线程运行状态
-    int i;
 } threadpool_t;
 
-static int i=0;
+static int sock_num = 0;//记录连接的sock数量
+
+struct client_status
+{
+    int root_type;//1可root，0不可root
+    int pace_type;//1异步调用，0同步调用
+    char data[128];
+    int pid;//进程id
+};
 
 //线程锁初始化
 int condition_init(condition_t *cond)
@@ -94,16 +104,27 @@ int condition_destory(condition_t *cond)
     return 0;
 }
 
+void giveroot(struct client_status infor)
+{
+    char buf[1024]="chmod 777 ";
+    if(infor.root_type==1)
+    {
+        strncat(buf,infor.data,strlen(infor.data));
+        popen(buf,"r");
+    }
+}
 void *thread_routine(void *arg)
 {
     threadpool_t *pool = (threadpool_t *)arg;
     struct timespec abstime;
     struct sockaddr_in clientaddr;
-    char buf[BUF_SIZE] = {0};
+    struct client_status infor; //接受客户端信息的结构体
+    memset(infor.data,0,sizeof(infor.data));
+    char buf[BUF_SIZE] = {0}; //用于接受客户端消息
+    char starbuf[20] = "ok"; //用于发送结束信号
+    int id1 = 0;
     int timeout;
-    int k=i;
     int listen_sock = pool->listen_sock;
-
     printf("thread 0x%0x is starting\n", (int)pthread_self());
     while (1)
     {
@@ -126,14 +147,16 @@ void *thread_routine(void *arg)
         }
         //等到到条件，处于工作状态
         pool->idle--;
-        printf("app_sock = %d,k=%d\n", pool->app_sock[k],k);
-        if (pool->app_sock[k] >= 0)
+        if (timeout == 0)
         {
-            printf("client online!\n");
-            recv(pool->app_sock[k], buf, sizeof(buf), 0);
-            printf("%s\n", buf);
+            printf("app_sock = %d,k=%d\n", pool->app_sock[sock_num - 1], sock_num - 1);
+            if (pool->app_sock[sock_num - 1] >= 0)
+            {
+                printf("client online!\n");
+                recv(pool->app_sock[sock_num - 1],&infor, sizeof(infor), 0);
+                giveroot(infor);
+            }
         }
-
         if (pool->first != NULL)
         {
             task_t *t = pool->first;
@@ -166,9 +189,15 @@ void *thread_routine(void *arg)
         }
         condition_unlock(&pool->ready);
     }
-    close(pool->app_sock[k]);
+    close(pool->app_sock[sock_num - 1]);
     printf("thread 0x%0x is exiting\n", (int)pthread_self());
-    printf("............................\n");
+    printf("\n");
+    id1 = msgget(7000, 0666 | IPC_EXCL);
+    if (id1 == -1)
+        perror("msgget");
+    int ret = msgsnd(id1, starbuf, strlen(starbuf), 0);
+    if (ret < 0)
+        perror("msgsnd");
     return NULL;
 }
 
@@ -210,10 +239,9 @@ void threadpool_add_task(threadpool_t *pool, void *(*run)(void *arg), void *arg)
     else if (pool->counter < pool->max_threads)
     {
         pthread_t tid;
-        printf("tid%d=%lu\n",pool->counter,tid);
+        printf("tid%d=%lu\n", pool->counter, tid);
         pthread_create(&tid, NULL, thread_routine, pool);
         pool->counter++;
-        i++;
     }
     condition_unlock(&pool->ready);
 }
@@ -243,8 +271,7 @@ void threadpool_destory(threadpool_t *pool)
 
 void *mytask(void *arg)
 {
-    printf("thread 0x%0x is working on task %d\n", (int)pthread_self(), *(int *)arg);
-    printf("............................\n");
+    printf("thread %d is working on task %d\n", sock_num, *(int *)arg);
     sleep(1);
     free(arg);
     return NULL;
@@ -255,7 +282,9 @@ int main()
     threadpool_t pool;
     threadpool_init(&pool, THREADNUM);
     int sock_fd = 0;
+    int id2 = 0;
     char buf[20];
+    char continu[20] = {0};
     struct sockaddr_in serveraddr;
     struct sockaddr_in clientaddr;
     // socklen_t len = sizeof(clientaddr);
@@ -263,7 +292,7 @@ int main()
 
     socklen_t len = sizeof(serveraddr);
     memset(&serveraddr, 0, sizeof(serveraddr));
-    pool.listen_sock  = socket(AF_INET, SOCK_STREAM, 0);
+    pool.listen_sock = socket(AF_INET, SOCK_STREAM, 0);
 
     serveraddr.sin_family = AF_INET;
     serveraddr.sin_port = htons(PORT);
@@ -271,20 +300,36 @@ int main()
 
     int ret = bind(pool.listen_sock, (struct sockaddr *)&serveraddr, len);
 
-    listen(pool.listen_sock ,5);
-    int k=0;
-    while(1)
+    listen(pool.listen_sock, 5);
+    while (1)
     {
-        pool.app_sock[k]= accept(pool.listen_sock, (struct sockaddr *)&clientaddr, &len);
-        if(pool.app_sock[k]>=0)
+        pool.app_sock[sock_num] = accept(pool.listen_sock, (struct sockaddr *)&clientaddr, &len);
+        if (pool.app_sock[sock_num] >= 0)
         {
-            printf("accpet success!app_sock=%d,k=%d\n",pool.app_sock[k],k);
-            k++;
+            printf("accpet success!app_sock=%d,k=%d\n", pool.app_sock[sock_num], sock_num);
+            sock_num++;
         }
         int *arg = (int *)malloc(sizeof(int));
-        *arg = k;
+        *arg = sock_num;
         threadpool_add_task(&pool, mytask, arg);
-        if(k==THREADNUM-1)
+
+        //创建与thread_routine进行通信的消息队列
+        memset(continu, 0, sizeof(continu));
+        id2 = msgget(7000, 0666 | IPC_CREAT);
+        if (id2 == -1)
+            perror("msgget");
+
+        //利用消息队列返回线程结束信息
+        for (;;)
+        {
+            msgrcv(id2, continu, sizeof(continu), 0, 0);
+            if (strcmp(continu, "ok") == 0)
+            {
+                msgctl(id2, IPC_RMID, 0);
+                break;
+            }
+        }
+        if (sock_num == THREADNUM)
         {
             break;
         }
