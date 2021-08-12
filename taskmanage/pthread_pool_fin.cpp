@@ -48,10 +48,14 @@ static int sock_num = 0;//记录连接的sock数量
 
 struct client_status
 {
-    int root_type;//1可root，0不可root
-    int pace_type;//1异步调用，0同步调用
-    char data[128];
-    int pid;//进程id
+    int root_type; //1可root，0不可root
+    int pace_type; //1异步调用，0同步调用
+    char filename[128];
+    char filepath[128];
+    char buf[1024];
+    char needcommand[128];
+    int pid; //进程id
+    int fin;
 };
 
 //线程锁初始化
@@ -104,13 +108,27 @@ int condition_destory(condition_t *cond)
     return 0;
 }
 
-void giveroot(struct client_status infor)
+void giveroot(struct client_status infor,int sock_fd)
 {
-    char buf[1024]="chmod 777 ";
+    printf("giving root.....\n");
     if(infor.root_type==1)
     {
-        strncat(buf,infor.data,strlen(infor.data));
-        popen(buf,"r");
+        FILE *fp;
+        char buffer[1024] = {0};
+        fp = popen(infor.needcommand, "r");
+        if(fp==NULL)
+        {
+            printf("give root popen error!\n");
+        }
+
+        fgets(buffer, sizeof(buffer), fp);
+        printf("%s\n", buffer);
+        if(send(sock_fd,buffer,strlen(buffer),0)<0)
+        {
+            printf("giveroot send error!\n");
+        }
+
+        pclose(fp);
     }
 }
 void *thread_routine(void *arg)
@@ -119,9 +137,10 @@ void *thread_routine(void *arg)
     struct timespec abstime;
     struct sockaddr_in clientaddr;
     struct client_status infor; //接受客户端信息的结构体
-    memset(infor.data,0,sizeof(infor.data));
-    char buf[BUF_SIZE] = {0}; //用于接受客户端消息
-    char starbuf[20] = "ok"; //用于发送结束信号
+    memset(infor.filename,0,sizeof(infor.filename));
+    memset(infor.filepath,0,sizeof(infor.filepath));
+    memset(infor.needcommand,0,sizeof(infor.needcommand));
+    char okbuf[10] = "ok"; //用于发送结束信号
     int id1 = 0;
     int timeout;
     int listen_sock = pool->listen_sock;
@@ -154,7 +173,10 @@ void *thread_routine(void *arg)
             {
                 printf("client online!\n");
                 recv(pool->app_sock[sock_num - 1],&infor, sizeof(infor), 0);
-                giveroot(infor);
+                printf("root_type :%d\n",infor.root_type);
+                printf("filename is :%s\n",infor.filename);
+                printf("needcommand is : %s\n",infor.needcommand);
+                giveroot(infor,(int)pool->app_sock[sock_num -1 ]);
             }
         }
         if (pool->first != NULL)
@@ -195,7 +217,7 @@ void *thread_routine(void *arg)
     id1 = msgget(7000, 0666 | IPC_EXCL);
     if (id1 == -1)
         perror("msgget");
-    int ret = msgsnd(id1, starbuf, strlen(starbuf), 0);
+    int ret = msgsnd(id1, okbuf, strlen(okbuf), 0);
     if (ret < 0)
         perror("msgsnd");
     return NULL;
@@ -284,7 +306,7 @@ int main()
     int sock_fd = 0;
     int id2 = 0;
     char buf[20];
-    char continu[20] = {0};
+    char continu[10] = {0};
     struct sockaddr_in serveraddr;
     struct sockaddr_in clientaddr;
     // socklen_t len = sizeof(clientaddr);
