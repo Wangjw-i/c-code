@@ -35,7 +35,7 @@ void *cnnt(void *arg)
             break;
         }
     }
-    infor->fin=1;
+    returntask(infor);
     close(sock_fd);
     return NULL;
 }

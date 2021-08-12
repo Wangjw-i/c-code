@@ -14,5 +14,6 @@ struct client_status
     int pid; //进程id
     int fin;
 };
-void * cnnt(void* arg);
+void * cnnt(void* arg);//客户端接口
+void * returntask(void *arg);//回调函数
 #endif
