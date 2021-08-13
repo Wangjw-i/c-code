@@ -1,0 +1,4 @@
+target:
+	gcc -fPIC -c *c -I ../include
+	gcc -shared -o libCalc.so *.o -lpthread
+	mv libCalc.so /usr/lib
