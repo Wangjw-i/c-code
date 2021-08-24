@@ -4,5 +4,6 @@ void *returntask(void * arg)
 {
     struct client_status *t=(struct client_status*)(void*)arg;
     t->fin=1;
+    task_id++;
     return NULL;
 }

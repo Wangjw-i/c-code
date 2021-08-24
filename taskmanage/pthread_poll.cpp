@@ -31,14 +31,12 @@ typedef struct task
 
 typedef struct client
 {
-    int root_type; //1可root，0不可root
     int pace_type; //1异步调用，0同步调用
-    char filename[128];
-    char filepath[128];
     char buf[1024];
     char needcommand[128];
     int pid; //进程id
     int fin;
+    int k;
     int thread_select;
 }client_status;
 
@@ -50,7 +48,6 @@ typedef struct threadpool
     task_t *last;
     int listen_sock;
     int app_sock[10];
-    int pid;
     int counter1; //线程数量
     int counter2;
     int idle1;
@@ -61,7 +58,6 @@ typedef struct threadpool
 } threadpool_t;
 
 static int sock_num = 0;//记录连接的sock数量
-
 
 int condition_init(condition_t *cond);//线程锁初始化
 int condition_lock(condition_t *cond);//线程锁
@@ -102,12 +98,14 @@ int main()
 
     int ret = bind(pool.listen_sock, (struct sockaddr *)&serveraddr, len);
 
-    listen(pool.listen_sock, 5);
+    listen(pool.listen_sock, 6); //开始监听
     while (1)
     {
         pool.app_sock[sock_num] = accept(pool.listen_sock, (struct sockaddr *)&clientaddr, &len);
         if (pool.app_sock[sock_num] >= 0)
         {
+            if(sock_num>0)
+                printf("\n");
             printf("accpet success!app_sock=%d,k=%d\n", pool.app_sock[sock_num], sock_num);
             sock_num++;
             printf("app_sock = %d,k=%d\n", pool.app_sock[sock_num - 1], sock_num - 1);
@@ -116,7 +114,6 @@ int main()
                 printf("client online!\n");
                 recv(pool.app_sock[sock_num - 1], &pool.infor, sizeof(client_status), 0);
                 printf("pid :%d\n", pool.infor.pid);
-                printf("in main select is %d\n",pool.infor.thread_select);
             }
         }
         int *arg = (int *)malloc(sizeof(int));
@@ -139,13 +136,7 @@ int main()
                 break;
             }
         }
-        // if (sock_num == THREADNUM)
-        // {
-        //     break;
-        // }
     }
-    sleep(15); //为了等待其他线程结束 当然也可以通过pthread_join来做
-
     threadpool_destory(&pool);
     return 0;
 }
@@ -159,24 +150,20 @@ int condition_init(condition_t *cond)
         return status;
     return 0;
 }
-
 //线程锁
 int condition_lock(condition_t *cond)
 {
     return pthread_mutex_lock(&cond->pmutex);
 }
-
 //线程解锁
 int condition_unlock(condition_t *cond)
 {
     return pthread_mutex_unlock(&cond->pmutex);
 }
-
 int condition_wait(condition_t *cond)
 {
     return pthread_cond_wait(&cond->pcond, &cond->pmutex);
 }
-
 int condition_timewait(condition_t *cond, const struct timespec *abstime)
 {
     return pthread_cond_timedwait(&cond->pcond, &cond->pmutex, abstime);
@@ -201,27 +188,24 @@ int condition_destory(condition_t *cond)
 void giveroot(client_status infor,int sock_fd)
 {
     printf("giving root.....\n");
-    if(infor.root_type==1)
+    FILE *fp;
+    int i=0;
+    char buffer[1024] = {0};
+    fp = popen(infor.needcommand, "r");
+    if (fp == NULL)
     {
-        FILE *fp;
-        char buffer[1024] = {0};
-        fp = popen(infor.needcommand, "r");
-        if(fp==NULL)
-        {
-            printf("give root popen error!\n");
-        }
-
-        fgets(buffer, sizeof(buffer), fp);
-        printf("%s\n", buffer);
-        if(send(sock_fd,buffer,strlen(buffer),0)<0)
-        {
-            printf("giveroot send error!\n");
-        }
-
-        pclose(fp);
+        printf("give root popen error!\n");
     }
-}
+    while((buffer[i]=fgetc(fp))!=EOF)
+    printf("%c", buffer[i++]);
+    if (send(sock_fd, buffer, strlen(buffer)-1, 0) < 0)
+    {
+        printf("giveroot send error!\n");
+    }
 
+    pclose(fp);
+}
+//1号线程
 void *thread_routine1(void *arg)
 {
     threadpool_t *pool = (threadpool_t *)arg;
@@ -274,7 +258,7 @@ void *thread_routine1(void *arg)
             pool->first = t->next;
             //需要先解锁，以便添加新任务。其他消费者线程能够进入等待任务。
             condition_unlock(&pool->ready);
-            t->run(t->arg);
+            mytask(t->arg);
             free(t);
             condition_lock(&pool->ready);
         }
@@ -302,10 +286,9 @@ void *thread_routine1(void *arg)
     }
     close(pool->app_sock[sock_num - 1]);
     printf("thread 0x%0x is exiting\n", (int)pthread_self());
-    printf("\n");
     return NULL;
 }
-
+//2号线程
 void *thread_routine2(void *arg)
 {
     threadpool_t *pool = (threadpool_t *)arg;
@@ -386,7 +369,6 @@ void *thread_routine2(void *arg)
     }
     close(pool->app_sock[sock_num - 1]);
     printf("thread 0x%0x is exiting\n", (int)pthread_self());
-    printf("\n");
     return NULL;
 }
 //初始化
@@ -403,11 +385,8 @@ void threadpool_init(threadpool_t *pool, int threads)
     pool->max_threads = threads;
     pool->quit = 0;
     memset(pool->infor.buf,0,sizeof(pool->infor.buf));
-    memset(pool->infor.filename,0,sizeof(pool->infor.filename));
-    memset(pool->infor.filepath,0,sizeof(pool->infor.filepath));
     memset(pool->infor.needcommand,0,sizeof(pool->infor.needcommand));
 }
-
 //加任务
 void threadpool_add_task(threadpool_t *pool, void *(*run)(void *arg), void *arg)
 {
@@ -427,7 +406,6 @@ void threadpool_add_task(threadpool_t *pool, void *(*run)(void *arg), void *arg)
     else
         pool->last->next = newstask;
     pool->last = newstask;
-    printf("select is %d\n",pool->infor.thread_select);
     switch (pool->infor.thread_select)
     {
     case 1:

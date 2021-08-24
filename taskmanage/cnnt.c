@@ -16,6 +16,7 @@ void *cnnt(void *arg)
     struct sockaddr_in clientaddr;
     socklen_t len = sizeof(clientaddr);
     memset(&clientaddr, 0, sizeof(clientaddr));
+    memset(infor->buf,0,sizeof(infor->buf));
     sock_fd = socket(AF_INET, SOCK_STREAM, 0);
     clientaddr.sin_family = AF_INET;
     clientaddr.sin_port = htons(PORT);
@@ -23,7 +24,12 @@ void *cnnt(void *arg)
     while (1)
     {
         int ret = connect(sock_fd, (struct sockaddr *)&clientaddr, len);
-        if (ret >= 0)
+        // if(ret<0)
+        // {
+        //     perror("connect");
+        //     continu;
+        // }
+        if(ret >=0)
         {
             printf("connect success!\n");
             send(sock_fd,infor, sizeof(struct client_status), 0);
